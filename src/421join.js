@@ -310,6 +310,73 @@ yy.Select.prototype.compileJoins = function(query) {
 			//			console.log(151,source.onleftfns, source.onrightfns);
 			//			console.log(source);
 		} else if (jn.on) {
+
+			//-----------------------------------------
+			// try to simplify
+			function fixJoin(nd) {
+				nd=normalize(nd);
+				// simplify join if there is optimization possible node and move rest to the where clause
+				// ENABLE IT BY : alasql.options.simplifyJoins=true
+				// IMPLIED REQUIREMENT : all join tables MUST have primary key id
+				// TODO ADD search for primary key (unique column ?)
+				if (!alasql.options.simplifyJoins) return nd;
+				function normalize(nd) { while (nd instanceof yy.UniOp && !nd.op && nd.right && !nd.left) nd=nd.right; return nd }
+				function isOK(nd) { return (nd instanceof yy.Op && nd.op === '=' && !nd.allsome) }  // is optimizable
+				if (isOK(nd)) return nd;
+				var a=[];
+				function wlkand(nd) { nd=normalize(nd); if (nd.op === "AND") { if (nd.left) wlkand(nd.left);if (nd.right) wlkand(nd.right); } else a.push(nd); }
+				wlkand(nd);
+				if (a.length < 2) return nd; // something is wrong, return normalized original
+				for (var i=0;i<a.length;i++) {
+					var n = a[i];
+					if (isOK(n)) {
+						a.splice(i,1);
+						// return the simple node and move all other AND members to the main where clause
+						var t
+						if (jn.joinmode == "INNER") {	// JOIN ...
+							if (self.where) {
+								if (!self.where.expression) throw "fixJoin() : unsupported where state ";
+								t = new yy.Op({op:'AND',left:a[a.length-1],right:self.where.expression})
+							} else
+								t = a[a.length-1];
+							for (var j=0;j<a.length-1;j++) t=new yy.Op({op:'AND',left:a[j],right:t});
+						} else if (jn.joinmode == "LEFT") { // LEFT JOIN
+							var ba;
+							if (a.length == 1)
+								ba = a[0];
+							else {
+								ba = new yy.Op({op:'AND',left:a[a.length-2],right:a[a.length-1]});
+								for (var j=0;j<a.length-2;j++) ba=new yy.Op({op:'AND',left:a[j],right:ba});
+							}
+							var own = new yy.Op({
+								op:'OR',
+								left:new yy.Op({
+									left : new yy.Column({columnid:"id" /* TODO LOOKUP FOR PRIMARY COLUMN */,tableid:jn.as||jn.table.tableid}),
+									op : 'IS',
+									right : new yy.NullValue({
+										value : undefined
+									})
+								}),
+								right:ba
+							});
+							if (self.where) {
+								if (!self.where.expression) throw "fixJoin() : unsupported where state";
+								t = new yy.Op({op:'AND',left:self.where.expression,right:own})
+							} else
+								t = own;
+						} else {
+							// unsupported
+							return nd;
+						}
+						self.where=new yy.Expression({expression:t})
+						return n;
+					}
+				}
+				return nd;
+			}
+			jn.on=fixJoin(jn.on);
+			//-----------------------------------------
+
 			//console.log(jn.on);
 			if (jn.on instanceof yy.Op && jn.on.op === '=' && !jn.on.allsome) {
 				//				console.log('ix optimization', jn.on.toJS('p',query.defaultTableid) );
