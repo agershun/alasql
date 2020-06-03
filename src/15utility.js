@@ -695,7 +695,7 @@ var saveFile = (utils.saveFile = function(path, data, cb, opts) {
 								res = cb(res);
 							}
 						};
-						fileWriter.write(data);
+						fileWriter.write(new Blob([data], {type: 'text/plain'}));	// blob : add support for chrome filesystem api 
 					});
 				});
 			});
